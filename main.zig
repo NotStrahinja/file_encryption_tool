@@ -13,60 +13,54 @@ fn chunk_nonce(base_nonce: [chacha_poly.nonce_length]u8, counter: u64) [chacha_p
     return n;
 }
 
+const Mode = enum { encrypt, decrypt };
+
+fn print_usage(prog_name: []const u8) void {
+    std.log.info("usage: {s} [-e | -d] <file> -p <password>", .{prog_name});
+}
+
+fn fail_usage(prog_name: []const u8, msg: []const u8) noreturn {
+    std.log.err("{s}", .{msg});
+    print_usage(prog_name);
+    std.process.exit(1);
+}
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
-    if (args.len != 5) {
-        std.log.err("invalid arguments", .{});
-        std.log.info("usage: {s} [-e | -d] <file> -p <password>", .{args[0]});
-        std.process.exit(1);
-    }
+    if (args.len != 5) fail_usage(args[0], "invalid arguments");
 
-    if (std.mem.eql(u8, args[1], "-e")) {
-        const file_name = args[2];
-        std.log.info("encrypting {s}...", .{file_name});
+    const mode: Mode = if (std.mem.eql(u8, args[1], "-e"))
+        .encrypt
+    else if (std.mem.eql(u8, args[1], "-d"))
+        .decrypt
+    else
+        fail_usage(args[0], "invalid arguments");
 
-        var out_name: [260]u8 = undefined;
+    if (!std.mem.eql(u8, args[3], "-p")) fail_usage(args[0], "no password provided.");
 
-        const out_name_slice = try std.fmt.bufPrint(&out_name, "{s}.enc", .{file_name});
+    const file_name = args[2];
+    const password = args[4];
 
-        if (std.mem.eql(u8, args[3], "-p")) {
-            const password = args[4];
-            std.log.info("using password {s}...", .{password});
-            const success: bool = try encrypt_file(init, file_name, out_name_slice, password);
-            if (success) {
-                std.log.info("{s} \x1b[32m->\x1b[0m {s}", .{file_name, out_name_slice});
-            } else {
-                std.log.err("{s} failed!", .{file_name});
-            }
-        } else {
-            std.log.err("no password provided.", .{});
-            std.log.info("usage: {s} [-e | -d] <file> -p <password>", .{args[0]});
-            std.process.exit(1);
-        }
-    } else if (std.mem.eql(u8, args[1], "-d")) {
-        const file_name = args[2];
-        std.log.info("decrypting {s}...", .{file_name});
+    var out_name_buf: [260]u8 = undefined;
+    const success = switch (mode) {
+        .encrypt => blk: {
+            std.log.info("encrypting {s}...", .{file_name});
+            const out_name = try std.fmt.bufPrint(&out_name_buf, "{s}.enc", .{file_name});
+            break :blk .{ try encrypt_file(init, file_name, out_name, password), out_name };
+        },
+        .decrypt => blk: {
+            std.log.info("decrypting {s}...", .{file_name});
+            const out_name = file_name[0 .. file_name.len - 4];
+            break :blk .{ try decrypt_file(init, file_name, out_name, password), out_name };
+        },
+    };
 
-        if (std.mem.eql(u8, args[3], "-p")) {
-            const password = args[4];
-            std.log.info("using password {s}...", .{password});
-            const out_name = file_name[0..file_name.len - 4];
-            const success: bool = try decrypt_file(init, file_name, out_name, password);
-            if (success) {
-                std.log.info("{s} \x1b[32m->\x1b[0m {s}", .{file_name, out_name});
-            } else {
-                std.log.err("{s} failed!", .{file_name});
-            }
-        } else {
-            std.log.err("no password provided.", .{});
-            std.log.info("usage: {s} [-e | -d] <file> -p <password>", .{args[0]});
-            std.process.exit(1);
-        }
+    const ok, const out_name = success;
+    if (ok) {
+        std.log.info("{s} \x1b[32m->\x1b[0m {s}", .{ file_name, out_name });
     } else {
-        std.log.err("invalid arguments", .{});
-        std.log.info("usage: {s} [-e | -d] <file> -p <password>", .{args[0]});
-        std.process.exit(1);
+        std.log.err("{s} failed!", .{file_name});
     }
 }
 
